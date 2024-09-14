@@ -15,32 +15,6 @@ def preprocess(text):
     tokens = [re.sub(r'\W+', '', word) for word in tokens if re.sub(r'\W+', '', word) != '']
     return tokens
 
-def soundex(name):
-    name = name.upper()
-    soundex = ""
-    if name:
-        soundex = name[0]
-    
-    # Remove all occurrences of 'H' and 'W' except first letter
-    #name = name[1:].replace('H', '').replace('W', '')
-    
-    encodings = {
-        'AEIOUHWY': '0', 'BFPV': '1', 'CGJKQSXZ': '2', 'DT': '3',
-        'L': '4', 'MN': '5', 'R': '6'
-    }
-    
-    for char in name:
-        for key in encodings:
-            if char in key:
-                code = encodings[key]
-                if code != soundex[-1]:
-                    soundex += code
-                break
-        if len(soundex) == 4:
-            break
-    
-    soundex = soundex.ljust(4, '0')
-    return soundex
 
 def create_indexes(folder_path):
     inverted_index = defaultdict(lambda: defaultdict(list))
@@ -128,6 +102,32 @@ def process_biword_query(query, biword_index):
     
     return result_docs
 
+def soundex(name):
+    name = name.upper()
+    soundex = name[0]
+    
+    # Conversion table
+    conversions = {
+        'BFPV': '1', 'CGJKQSXZ': '2', 'DT': '3',
+        'L': '4', 'MN': '5', 'R': '6'
+    }
+    
+    # Convert name to Soundex code
+    for char in name[1:]:
+        for key in conversions:
+            if char in key:
+                code = conversions[key]
+                if code != soundex[-1]:  # Only add if not the same as the last code
+                    soundex += code
+                break
+        if len(soundex) == 4:
+            break
+    
+    # Pad with zeros if necessary
+    soundex = soundex.ljust(4, '0')
+    
+    return soundex
+
 def process_proximity_query(query, inverted_index, proximity):
     tokens = preprocess(query)
     tokens = [token for token in tokens if token not in {'and'}]
@@ -160,17 +160,65 @@ def process_proximity_query(query, inverted_index, proximity):
     
     return result
 
-def process_soundex_query(query, soundex_index):
-    tokens = preprocess(query)
-    result_docs = set()
+# def process_soundex_query(query, soundex_index, inverted_index):
+#     tokens = preprocess(query)
+#     tokens = [token for token in tokens if token not in {'and', 'or', 'not'}]
+    
+#     if len(tokens) != 2:
+#         print("Error: Soundex query should contain exactly two terms.")
+#         return set()
+    
+#     token1, token2 = tokens
+#     soundex_code1 = soundex(token1)
+#     soundex_code2 = soundex(token2)
+    
+#     similar_words1 = soundex_index.get(soundex_code1, set())
+#     similar_words2 = soundex_index.get(soundex_code2, set())
+    
+#     result_docs = set()
+    
+#     for word1 in similar_words1:
+#         for word2 in similar_words2:
+#             if word1 in inverted_index and word2 in inverted_index:
+#                 docs1 = set(inverted_index[word1].keys())
+#                 docs2 = set(inverted_index[word2].keys())
+#                 common_docs = docs1.intersection(docs2)
+#                 result_docs.update(common_docs)
+    
+#     return result_docs
+def process_soundex_query(query, soundex_index, inverted_index):
+    tokens = query.lower().split()
+    result = set()
+    matched_words = {}
     
     for token in tokens:
-        soundex_code = soundex(token)
-        if soundex_code in soundex_index:
-            for word in soundex_index[soundex_code]:
-                result_docs.update(soundex_index[soundex_code][word].keys())
+        if token not in {'and', 'or', 'not'}:
+            soundex_code = soundex(token)
+            similar_words = soundex_index.get(soundex_code, set())
+            token_result = set()
+            token_matched_words = set()
+            for word in similar_words:
+                if word in inverted_index:
+                    token_result.update(inverted_index[word])
+                    token_matched_words.add(word)
+            if not result:
+                result = token_result
+                matched_words[token] = token_matched_words
+            else:
+                result.intersection_update(token_result)
+                matched_words[token] = token_matched_words
     
-    return result_docs
+    return result, matched_words
+
+def create_soundex_index(inverted_index):
+    soundex_index = {}
+    for word in inverted_index:
+        soundex_code = soundex(word)
+        if soundex_code in soundex_index:
+            soundex_index[soundex_code].add(word)
+        else:
+            soundex_index[soundex_code] = {word}
+    return soundex_index
 
 def main():
     folder_path = r"C:\Users\ravee\Downloads\Corpus"
@@ -206,7 +254,11 @@ def main():
             #     print("No documents match the proximity query.")
         elif query_type == 'soundex':
             query = input("Enter your Soundex query: ")
-            result_docs = process_soundex_query(query, soundex_index)
+            result_docs, matched_words = process_soundex_query(query, soundex_index, inverted_index)
+            # if result_docs:
+            #     print("Matched words:")
+            #     for token, words in matched_words.items():
+            #         print(f"  '{token}' matched with: {', '.join(words)}")
         else:
             print("Invalid query type. Please enter 'boolean', 'biword', 'proximity', or 'soundex'.")
             continue
