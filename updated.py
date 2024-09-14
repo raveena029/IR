@@ -1,86 +1,50 @@
 import os
 import re
+from collections import defaultdict
 from nltk.corpus import stopwords
 from nltk.stem import PorterStemmer
 from nltk.tokenize import word_tokenize
 
-# ... (keep the preprocess function as is)
 def preprocess(text):
-    # Case folding (lowercasing)
     text = text.lower()
-    
-    # Tokenization
     tokens = word_tokenize(text)
-    
-    # Stopword removal
     stop_words = set(stopwords.words('english'))
     tokens = [word for word in tokens if word not in stop_words]
-    
-    # Stemming (using PorterStemmer)
     ps = PorterStemmer()
     tokens = [ps.stem(word) for word in tokens]
-    
-    # Normalization (remove punctuation, special chars, etc.)
     tokens = [re.sub(r'\W+', '', word) for word in tokens if re.sub(r'\W+', '', word) != '']
-    
     return tokens
-# Modified inverted index creation
-'''
-def create_inverted_index(folder_path):
-    inverted_index = {}
+
+
+def create_indexes(folder_path):
+    inverted_index = defaultdict(lambda: defaultdict(list))
+    biword_index = defaultdict(lambda: defaultdict(list))
+    soundex_index = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
     
     for filename in os.listdir(folder_path):
         if filename.endswith(".txt"):
             filepath = os.path.join(folder_path, filename)
             
-            with open(filepath, 'r', encoding='utf-8') as file:
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as file:
                 content = file.read()
                 
             tokens = preprocess(content)
             
             for position, token in enumerate(tokens):
-                if token in inverted_index:
-                    if filename in inverted_index[token]:
-                        inverted_index[token][filename].append(position)
-                    else:
-                        inverted_index[token][filename] = [position]
-                else:
-                    inverted_index[token] = {filename: [position]}
+                # Regular inverted index
+                inverted_index[token][filename].append(position)
+                
+                # Biword index
+                if position < len(tokens) - 1:
+                    biword = f"{token} {tokens[position + 1]}"
+                    biword_index[biword][filename].append(position)
+                
+                # Soundex index
+                soundex_code = soundex(token)
+                soundex_index[soundex_code][token][filename].append(position)
     
-    return inverted_index
+    return inverted_index, biword_index, soundex_index
 
-# ... (keep other functions as i
-def process_proximity_query(query, inverted_index, proximity):
-    tokens = preprocess(query)
-    tokens = [token for token in tokens if token not in {'and'}]
-    
-    if len(tokens) != 2:
-        print("Error: Proximity query should contain exactly two terms.")
-        return {}
-    
-    token1, token2 = tokens
-    
-    docs1 = inverted_index.get(token1, {})
-    docs2 = inverted_index.get(token2, {})
-    
-    common_docs = set(docs1.keys()) & set(docs2.keys())
-    
-    result = {}
-    for doc in common_docs:
-        positions1 = docs1[doc]
-        positions2 = docs2[doc]
-        
-        for pos1 in positions1:
-            for pos2 in positions2:
-                if abs(pos1 - pos2) <= proximity:
-                    if doc in result:
-                        result[doc].append(abs(pos1 - pos2))
-                    else:
-                        result[doc] = [abs(pos1 - pos2)]
-                    break
-    
-    return result
-'''
 def boolean_and(list1, list2):
     return list1.intersection(list2)
 
@@ -89,11 +53,13 @@ def boolean_or(list1, list2):
 
 def boolean_not(list1, total_docs):
     return total_docs - list1
-def process_query(query, inverted_index, total_docs):
+
+def process_boolean_query(query, inverted_index, total_docs):
     tokens = query.lower().split()
-    result = set(total_docs)  # Start with all documents
-    current_op = 'and'  # Default operation
+    result = set()
+    current_op = 'and'
     negate_next = False
+    first_term = True
 
     for token in tokens:
         if token in {'and', 'or', 'not'}:
@@ -102,120 +68,65 @@ def process_query(query, inverted_index, total_docs):
             else:
                 current_op = token
         else:
-            posting_list = inverted_index.get(token, set())
-            if negate_next:
-                posting_list = total_docs - posting_list
-                negate_next = False
+            # Preprocess the token
+            processed_tokens = preprocess(token)
+            if processed_tokens:
+                token = processed_tokens[0]  # Take the first processed token
+                posting_list = set(inverted_index[token].keys()) if token in inverted_index else set()
 
-            if current_op == 'and':
-                result = result.intersection(posting_list)
-            elif current_op == 'or':
-                result = result.union(posting_list)
+                if negate_next:
+                    posting_list = total_docs - posting_list
+                    negate_next = False
+
+                if first_term:
+                    result = posting_list
+                    first_term = False
+                elif current_op == 'and':
+                    result = boolean_and(result, posting_list)
+                elif current_op == 'or':
+                    result = boolean_or(result, posting_list)
 
     return result
-# ... (previous code remains the same)
 
-def process_biword_query(query, inverted_index, total_docs):
-    # Preprocess the biword query
+def process_biword_query(query, biword_index):
     tokens = preprocess(query)
-    
-    if len(tokens) < 2:
-        print("Error: Biword query should contain at least two words.")
-        return set()
-    
-    # Get the first two tokens for the biword query
-    token1, token2 = tokens[:2]
-    
-    # Get the posting lists for both tokens
-    posting_list1 = inverted_index.get(token1, set())
-    posting_list2 = inverted_index.get(token2, set())
-    
-    # Find documents that contain both tokens
-    common_docs = posting_list1.intersection(posting_list2)
-    
-    # Check for consecutive occurrence in the common documents
     result_docs = set()
-    for doc in common_docs:
-        filepath = os.path.join(folder_path, doc)
-        with open(filepath, 'r', encoding='utf-8') as file:
-            content = file.read()
-        
-        # Preprocess the document content
-        doc_tokens = preprocess(content)
-        
-        # Check for consecutive occurrence
-        for i in range(len(doc_tokens) - 1):
-            if doc_tokens[i] == token1 and doc_tokens[i+1] == token2:
-                result_docs.add(doc)
-                break
+    
+    for i in range(len(tokens) - 1):
+        biword = f"{tokens[i]} {tokens[i+1]}"
+        if biword in biword_index:
+            if not result_docs:
+                result_docs = set(biword_index[biword].keys())
+            else:
+                result_docs &= set(biword_index[biword].keys())
     
     return result_docs
-# Modified main function
-'''
-def main():
-    global folder_path
-    folder_path = r"C:\Users\ravee\Downloads\Corpus"
-    
-    inverted_index = create_inverted_index(folder_path)
-    total_docs = set(os.listdir(folder_path))
-    
-    while True:
-        query_type = input("Enter query type (boolean/biword/proximity) or 'exit' to quit: ").lower()
-        
-        if query_type == 'exit':
-            break
-        
-        if query_type == 'boolean':
-            query = input("Enter your Boolean query: ")
-            result_docs = process_query(query, inverted_index, total_docs)
-            if result_docs:
-                print("Documents matching the query:", ', '.join(result_docs))
-            else:
-                print("No documents match the query.")
-        elif query_type == 'biword':
-            query = input("Enter your Biword query: ")
-            result_docs = process_biword_query(query, inverted_index, total_docs)
-            if result_docs:
-                print("Documents matching the query:", ', '.join(result_docs))
-            else:
-                print("No documents match the query.")
-        elif query_type == 'proximity':
-            query = input("Enter your Proximity query: ")
-            proximity = int(input("Enter the proximity (number of words): "))
-            result = process_proximity_query(query, inverted_index, proximity)
-            if result:
-                for doc, distances in result.items():
-                    print(f"Document: {doc}, Distances: {distances}")
-            else:
-                print("No documents match the proximity query.")
-        else:
-            print("Invalid query type. Please enter 'boolean', 'biword', or 'proximity'.")
 
-if __name__ == "__main__":
-    main()
-'''
-def create_inverted_index(folder_path):
-    inverted_index = {}
+def soundex(name):
+    name = name.upper()
+    soundex = name[0]
     
-    for filename in os.listdir(folder_path):
-        if filename.endswith(".txt"):
-            filepath = os.path.join(folder_path, filename)
-            
-            with open(filepath, 'r', encoding='utf-8') as file:
-                content = file.read()
-                
-            tokens = preprocess(content)
-            
-            for position, token in enumerate(tokens):
-                if token in inverted_index:
-                    if filename in inverted_index[token]:
-                        inverted_index[token][filename].append(position)
-                    else:
-                        inverted_index[token][filename] = [position]
-                else:
-                    inverted_index[token] = {filename: [position]}
+    # Conversion table
+    conversions = {
+        'BFPV': '1', 'CGJKQSXZ': '2', 'DT': '3',
+        'L': '4', 'MN': '5', 'R': '6'
+    }
     
-    return inverted_index
+    # Convert name to Soundex code
+    for char in name[1:]:
+        for key in conversions:
+            if char in key:
+                code = conversions[key]
+                if code != soundex[-1]:  # Only add if not the same as the last code
+                    soundex += code
+                break
+        if len(soundex) == 4:
+            break
+    
+    # Pad with zeros if necessary
+    soundex = soundex.ljust(4, '0')
+    
+    return soundex
 
 def process_proximity_query(query, inverted_index, proximity):
     tokens = preprocess(query)
@@ -249,34 +160,76 @@ def process_proximity_query(query, inverted_index, proximity):
     
     return result
 
+def process_soundex_query(query, soundex_index, inverted_index):
+    tokens = preprocess(query)
+    tokens = [token for token in tokens if token not in {'and', 'or', 'not'}]
+    
+    if len(tokens) != 2:
+        print("Error: Soundex query should contain exactly two terms.")
+        return set()
+    
+    token1, token2 = tokens
+    soundex_code1 = soundex(token1)
+    soundex_code2 = soundex(token2)
+    
+    similar_words1 = soundex_index.get(soundex_code1, set())
+    similar_words2 = soundex_index.get(soundex_code2, set())
+    
+    result_docs = set()
+    
+    for word1 in similar_words1:
+        for word2 in similar_words2:
+            if word1 in inverted_index and word2 in inverted_index:
+                docs1 = set(inverted_index[word1].keys())
+                docs2 = set(inverted_index[word2].keys())
+                common_docs = docs1.intersection(docs2)
+                result_docs.update(common_docs)
+    
+    return result_docs
+
 def main():
-    global folder_path
     folder_path = r"C:\Users\ravee\Downloads\Corpus"
     
-    inverted_index = create_inverted_index(folder_path)
+    inverted_index, biword_index, soundex_index = create_indexes(folder_path)
     total_docs = set(os.listdir(folder_path))
     
+    print(f"Indexed {len(total_docs)} documents.")
+    print(f"Inverted index contains {len(inverted_index)} unique terms.")
+    print(f"Biword index contains {len(biword_index)} unique biwords.")
+    print(f"Soundex index contains {len(soundex_index)} unique codes.")
+    
     while True:
-        query_type = input("Enter query type (boolean/biword/proximity) or 'exit' to quit: ").lower()
+        query_type = input("Enter query type (boolean/biword/proximity/soundex) or 'exit' to quit: ").lower()
         
         if query_type == 'exit':
             break
         
         if query_type == 'boolean':
-            # ... (keep existing boolean query logic)
+            query = input("Enter your Boolean query: ")
+            result_docs = process_boolean_query(query, inverted_index, total_docs)
         elif query_type == 'biword':
-            # ... (keep existing biword query logic)
+            query = input("Enter your Biword query: ")
+            result_docs = process_biword_query(query, biword_index)
         elif query_type == 'proximity':
             query = input("Enter your Proximity query: ")
             proximity = int(input("Enter the proximity (number of words): "))
-            result = process_proximity_query(query, inverted_index, proximity)
-            if result:
-                for doc, distances in result.items():
-                    print(f"Document: {doc}, Words between: {distances}")
-            else:
-                print("No documents match the proximity query.")
+            result_docs = process_proximity_query(query, inverted_index, proximity)
+            # if result:
+            #     for doc, distances in result.items():
+            #         print(f"Document: {doc}, Words between: {distances}")
+            # else:
+            #     print("No documents match the proximity query.")
+        elif query_type == 'soundex':
+            query = input("Enter your Soundex query: ")
+            result_docs = process_soundex_query(query, soundex_index, inverted_index)
         else:
-            print("Invalid query type. Please enter 'boolean', 'biword', or 'proximity'.")
+            print("Invalid query type. Please enter 'boolean', 'biword', 'proximity', or 'soundex'.")
+            continue
+        
+        if result_docs:
+            print("Documents matching the query:", ', '.join(result_docs))
+        else:
+            print("No documents match the query.")
 
 if __name__ == "__main__":
     main()
