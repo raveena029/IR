@@ -1,10 +1,16 @@
+import streamlit as st
 import os
 import re
+import base64
 from collections import defaultdict
 from nltk.corpus import stopwords
 from nltk.stem import PorterStemmer
 from nltk.tokenize import word_tokenize
 
+# Include all your existing functions here (preprocess, create_indexes, boolean_and, boolean_or, boolean_not, 
+# process_boolean_query, process_biword_query, soundex, process_proximity_query, process_soundex_query, create_soundex_index)
+
+# ... (paste all the functions from your original code here)
 def preprocess(text):
     text = text.lower()
     tokens = word_tokenize(text)
@@ -160,76 +166,140 @@ def process_proximity_query(query, inverted_index, proximity):
     
     return result
 
+# def process_soundex_query(query, soundex_index, inverted_index):
+#     tokens = preprocess(query)
+#     tokens = [token for token in tokens if token not in {'and', 'or', 'not'}]
+    
+#     if len(tokens) != 2:
+#         print("Error: Soundex query should contain exactly two terms.")
+#         return set()
+    
+#     token1, token2 = tokens
+#     soundex_code1 = soundex(token1)
+#     soundex_code2 = soundex(token2)
+    
+#     similar_words1 = soundex_index.get(soundex_code1, set())
+#     similar_words2 = soundex_index.get(soundex_code2, set())
+    
+#     result_docs = set()
+    
+#     for word1 in similar_words1:
+#         for word2 in similar_words2:
+#             if word1 in inverted_index and word2 in inverted_index:
+#                 docs1 = set(inverted_index[word1].keys())
+#                 docs2 = set(inverted_index[word2].keys())
+#                 common_docs = docs1.intersection(docs2)
+#                 result_docs.update(common_docs)
+    
+#     return result_docs
 def process_soundex_query(query, soundex_index, inverted_index):
-    tokens = preprocess(query)
-    tokens = [token for token in tokens if token not in {'and', 'or', 'not'}]
+    tokens = query.lower().split()
+    result = set()
+    matched_words = {}
     
-    if len(tokens) != 2:
-        print("Error: Soundex query should contain exactly two terms.")
-        return set()
+    for token in tokens:
+        if token not in {'and', 'or', 'not'}:
+            soundex_code = soundex(token)
+            similar_words = soundex_index.get(soundex_code, set())
+            token_result = set()
+            token_matched_words = set()
+            for word in similar_words:
+                if word in inverted_index:
+                    token_result.update(inverted_index[word])
+                    token_matched_words.add(word)
+            if not result:
+                result = token_result
+                matched_words[token] = token_matched_words
+            else:
+                result.intersection_update(token_result)
+                matched_words[token] = token_matched_words
     
-    token1, token2 = tokens
-    soundex_code1 = soundex(token1)
-    soundex_code2 = soundex(token2)
-    
-    similar_words1 = soundex_index.get(soundex_code1, set())
-    similar_words2 = soundex_index.get(soundex_code2, set())
-    
-    result_docs = set()
-    
-    for word1 in similar_words1:
-        for word2 in similar_words2:
-            if word1 in inverted_index and word2 in inverted_index:
-                docs1 = set(inverted_index[word1].keys())
-                docs2 = set(inverted_index[word2].keys())
-                common_docs = docs1.intersection(docs2)
-                result_docs.update(common_docs)
-    
-    return result_docs
+    return result, matched_words
 
+def create_soundex_index(inverted_index):
+    soundex_index = {}
+    for word in inverted_index:
+        soundex_code = soundex(word)
+        if soundex_code in soundex_index:
+            soundex_index[soundex_code].add(word)
+        else:
+            soundex_index[soundex_code] = {word}
+    return soundex_index
+# Streamlit app
 def main():
-    folder_path = r"C:\Users\ravee\Downloads\Corpus"
-    
-    inverted_index, biword_index, soundex_index = create_indexes(folder_path)
-    total_docs = set(os.listdir(folder_path))
-    
-    print(f"Indexed {len(total_docs)} documents.")
-    print(f"Inverted index contains {len(inverted_index)} unique terms.")
-    print(f"Biword index contains {len(biword_index)} unique biwords.")
-    print(f"Soundex index contains {len(soundex_index)} unique codes.")
-    
-    while True:
-        query_type = input("Enter query type (boolean/biword/proximity/soundex) or 'exit' to quit: ").lower()
-        
-        if query_type == 'exit':
-            break
-        
-        if query_type == 'boolean':
-            query = input("Enter your Boolean query: ")
-            result_docs = process_boolean_query(query, inverted_index, total_docs)
-        elif query_type == 'biword':
-            query = input("Enter your Biword query: ")
-            result_docs = process_biword_query(query, biword_index)
-        elif query_type == 'proximity':
-            query = input("Enter your Proximity query: ")
-            proximity = int(input("Enter the proximity (number of words): "))
-            result_docs = process_proximity_query(query, inverted_index, proximity)
-            # if result:
-            #     for doc, distances in result.items():
-            #         print(f"Document: {doc}, Words between: {distances}")
-            # else:
-            #     print("No documents match the proximity query.")
-        elif query_type == 'soundex':
-            query = input("Enter your Soundex query: ")
-            result_docs = process_soundex_query(query, soundex_index, inverted_index)
-        else:
-            print("Invalid query type. Please enter 'boolean', 'biword', 'proximity', or 'soundex'.")
-            continue
-        
-        if result_docs:
-            print("Documents matching the query:", ', '.join(result_docs))
-        else:
-            print("No documents match the query.")
+    st.title("Info-Web")
 
+    # Initialize session state
+    if 'indexes_created' not in st.session_state:
+        st.session_state.indexes_created = False
+
+    # Sidebar for folder path input
+    folder_path = st.sidebar.text_input("Enter the path to your corpus folder:", r"C:\Users\ravee\Downloads\Corpus")
+
+    if st.sidebar.button("Create Indexes"):
+        with st.spinner("Creating indexes..."):
+            inverted_index, biword_index, soundex_index = create_indexes(folder_path)
+            total_docs = set(os.listdir(folder_path))
+            st.session_state.inverted_index = inverted_index
+            st.session_state.biword_index = biword_index
+            st.session_state.soundex_index = soundex_index
+            st.session_state.total_docs = total_docs
+            st.session_state.indexes_created = True
+        st.success("Indexes created successfully!")
+
+    if st.session_state.indexes_created:
+        query_type = st.selectbox("Select Query Type", ["Boolean Query", "Biword Query", "Proximity Query", "Soundex Query"])
+
+        if query_type == "Boolean Query":
+            query = st.text_input("Enter your Boolean query:")
+            if st.button("Search"):
+                result_docs = process_boolean_query(query, st.session_state.inverted_index, st.session_state.total_docs)
+                display_results(result_docs, folder_path)
+
+        elif query_type == "Biword Query":
+            query = st.text_input("Enter your Biword query:")
+            if st.button("Search"):
+                result_docs = process_biword_query(query, st.session_state.biword_index)
+                display_results(result_docs, folder_path)
+
+        elif query_type == "Proximity Query":
+            query = st.text_input("Enter your Proximity query:")
+            proximity = st.number_input("Enter the proximity (number of words):", min_value=1, value=1)
+            if st.button("Search"):
+                result_docs = process_proximity_query(query, st.session_state.inverted_index, proximity)
+                display_results(result_docs.keys(), folder_path)
+
+        elif query_type == "Soundex Query":
+            query = st.text_input("Enter your Soundex query:")
+            if st.button("Search"):
+                result_docs, matched_words = process_soundex_query(query, st.session_state.soundex_index, st.session_state.inverted_index)
+                display_results(result_docs, folder_path)
+                # st.write("Matched words:")
+                # for token, words in matched_words.items():
+                #     st.write(f"  '{token}' matched with: {', '.join(words)}")
+
+    else:
+        st.warning("Please create indexes first by entering the corpus folder path and clicking 'Create Indexes'.")
+
+def display_results(result_docs, folder_path):
+    if result_docs:
+        st.write("Documents matching the query:")
+        for doc in result_docs:
+            doc_path = os.path.join(folder_path, doc)
+            
+            # Read the file content
+            with open(doc_path, "r", encoding="utf-8") as file:
+                content = file.read()
+            
+            # Create a download link for the file
+            b64 = base64.b64encode(content.encode()).decode()
+            href = f'<a href="data:file/txt;base64,{b64}" download="{doc}">Download {doc}</a>'
+            
+            # Display the link and a preview of the content
+            st.markdown(href, unsafe_allow_html=True)
+            st.text_area(f"Preview of {doc}", content[:500] + "...", height=150)
+    else:
+        st.write("No documents match the query.")
+        
 if __name__ == "__main__":
     main()
