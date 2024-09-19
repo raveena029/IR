@@ -6,57 +6,43 @@ from nltk.stem import PorterStemmer
 from nltk.tokenize import word_tokenize
 from collections import defaultdict
 
-def calculate_tfidf(term, doc, inverted_index, doc_lengths, N):
-    tf = 1 + math.log10(inverted_index[term][doc])
-    idf = math.log10(N / len(inverted_index[term]))
-    return tf * idf
+def preprocess(text):
+    text = text.lower()
+    tokens = word_tokenize(text)
+    stop_words = set(stopwords.words('english'))
+    ps = PorterStemmer()
+    tokens = [ps.stem(word) for word in tokens if word not in stop_words]
+    tokens = [re.sub(r'\W+', '', word) for word in tokens if re.sub(r'\W+', '', word) != '']
+    return tokens
 
 def create_inverted_index(folder_path):
-    inverted_index = {}
+    inverted_index = defaultdict(list)
     doc_lengths = {}
+    doc_term_freqs = defaultdict(lambda: defaultdict(int))
+    
     for filename in os.listdir(folder_path):
         if filename.endswith(".txt"):
             filepath = os.path.join(folder_path, filename)
-            
             with open(filepath, 'r', encoding='utf-8') as file:
                 content = file.read()
-            
-            # Preprocess the content to get tokens
             tokens = preprocess(content)
-            
-            for token in tokens:
-                if token in inverted_index:
-                    if filename in inverted_index[token]:
-                        inverted_index[token][filename] += 1
-                    else:
-                        inverted_index[token][filename] = 1
-                else:
-                    inverted_index[token] = {filename: 1}
-            
-            # Calculate document length
             doc_lengths[filename] = len(tokens)
+            for token in tokens:
+                doc_term_freqs[filename][token] += 1
+    
+    for doc, term_freqs in doc_term_freqs.items():
+        for term, freq in term_freqs.items():
+            inverted_index[term].append((doc, freq))
     
     return inverted_index, doc_lengths
 
-def preprocess(text):
-    # Case folding (lowercasing)
-    text = text.lower()
-    
-    # Tokenization
-    tokens = word_tokenize(text)
-    
-    # Stopword removal
-    stop_words = set(stopwords.words('english'))
-    tokens = [word for word in tokens if word not in stop_words]
-    
-    # Stemming (using PorterStemmer)
-    ps = PorterStemmer()
-    tokens = [ps.stem(word) for word in tokens]
-    
-    # Normalization (remove punctuation, special chars, etc.)
-    tokens = [re.sub(r'\W+', '', word) for word in tokens if re.sub(r'\W+', '', word) != '']
-    
-    return tokens
+def calculate_tfidf(term, doc, inverted_index, N, is_query=False):
+    tf = 1 + math.log10(next(freq for d, freq in inverted_index[term] if d == doc))
+    if is_query:
+        idf = math.log10(N / len(inverted_index[term]))
+    else:
+        idf = 1  # For documents, idf is 1 in lnc scheme
+    return tf * idf
 
 def cosine_similarity(query_vector, doc_vector):
     dot_product = sum(query_vector.get(term, 0) * doc_vector.get(term, 0) for term in set(query_vector) | set(doc_vector))
@@ -70,24 +56,30 @@ def cosine_similarity(query_vector, doc_vector):
 
 def vsm_search(query, inverted_index, doc_lengths, N):
     query_tokens = preprocess(query)
-    query_vector = {}
+    query_vector = defaultdict(float)
     for token in query_tokens:
-        query_vector[token] = query_vector.get(token, 0) + 1
+        query_vector[token] += 1
+    for token in query_vector:
+        query_vector[token] = (1 + math.log10(query_vector[token])) * math.log10(N / len(inverted_index[token]))
 
-    doc_scores = defaultdict(lambda: defaultdict(float))
+    doc_vectors = defaultdict(lambda: defaultdict(float))
     for term in query_vector:
         if term in inverted_index:
-            idf = math.log(N / len(inverted_index[term]))
-            for doc in inverted_index[term]:
-                tf = inverted_index[term][doc]
-                doc_scores[doc][term] = (1 + math.log(tf)) * idf
+            for doc, freq in inverted_index[term]:
+                doc_vectors[doc][term] = 1 + math.log10(freq)
+
+    # Normalize document vectors
+    for doc in doc_vectors:
+        magnitude = math.sqrt(sum(value ** 2 for value in doc_vectors[doc].values()))
+        for term in doc_vectors[doc]:
+            doc_vectors[doc][term] /= magnitude
 
     results = []
-    for doc in doc_scores:
-        similarity = cosine_similarity(query_vector, doc_scores[doc])
+    for doc in doc_vectors:
+        similarity = cosine_similarity(query_vector, doc_vectors[doc])
         results.append((doc, similarity))
 
-    return sorted(results, key=lambda x: x[1], reverse=True)
+    return sorted(results, key=lambda x: (-x[1], x[0]))[:10]
 
 def main():
     folder_path = r"C:\Users\ravee\Downloads\Corpus"
